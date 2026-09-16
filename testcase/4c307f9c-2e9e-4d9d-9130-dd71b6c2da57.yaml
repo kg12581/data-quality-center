@@ -1,0 +1,66 @@
+# 和「用户数据质量」一样的规则，只是换成有脏数据的文件，用来看失败效果（退出码 1）
+name: 用户数据质量_脏数据
+description: 故意放了几处脏数据：空 id、重复 id、负年龄、非法邮箱、非法状态
+version: 1
+
+vars:
+  partition: "1=1"
+
+sources:
+  users:
+    type: csv
+    path: data/users_dirty.csv
+    read_options:
+      encoding: utf-8
+
+checks:
+  - name: status 枚举合法
+    source: users
+    dim: validity
+    severity: high
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND status NOT IN ('active','inactive','pending')
+    expected: 0
+
+  - name: 邮箱格式非法明细
+    source: users
+    dim: validity
+    severity: high
+    sql: |
+      SELECT id, email FROM ${table}
+      WHERE ${partition} AND (email IS NULL OR email NOT GLOB '*@*.*')
+    mode: rows
+    threshold: 0.01
+
+  - name: 负数年龄明细
+    source: users
+    dim: validity
+    severity: high
+    sql: |
+      SELECT id, name, age FROM ${table}
+      WHERE ${partition} AND age < 0
+    mode: rows
+
+  - name: 用户 id 非空
+    source: users
+    dim: completeness
+    severity: high
+    type: not_null
+    column: id
+
+  - name: 年龄区间
+    source: users
+    dim: validity
+    severity: medium
+    type: range
+    column: age
+    min: 0
+    max: 120
+
+  - name: 行数下限
+    source: users
+    dim: completeness
+    severity: medium
+    type: row_count
+    min: 100

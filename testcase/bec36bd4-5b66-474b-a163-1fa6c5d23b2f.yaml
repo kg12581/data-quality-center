@@ -1,0 +1,89 @@
+# 数据质量规则集（改规则只改这个文件）
+# 文件名是 UUID（方便程序引用/提交服务器），人类可读的名字写在 name 里
+name: 用户数据质量
+description: CSV 用户表示例：id 唯一非空、年龄区间、邮箱格式、状态枚举、行数下限
+#
+# 规则两种写法：
+#   1) sql：直接写 SQL。带 expected 就是「指标断言」，不带就是「明细模式」（返回行即失败）
+#   2) 快捷方式：not_null / unique / enum / range / row_count，会自动生成 SQL
+#
+# 变量：SQL 和 filter 里可以用 ${name}；命令行 --var 覆盖，环境变量 DQ_VAR_<NAME> 也可以
+version: 1
+
+vars:
+  partition: "1=1" # 分区条件，例如按天跑：--var partition="dt = '2026-09-16'"
+
+sources:
+  users:
+    type: csv
+    path: data/users.csv
+    read_options:
+      encoding: utf-8
+  # 数据库 / 大数据的数据源写法见 config/rules_bigdata.yaml
+
+checks:
+  # ---------------- SQL 规则 ----------------
+  - name: status 枚举合法
+    source: users
+    dim: validity
+    severity: high # high = error，也可以直接写 error / warn / info
+    description: status 只允许 active / inactive / pending
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND status NOT IN ('active','inactive','pending')
+    expected: 0
+
+  - name: 邮箱格式非法明细
+    source: users
+    dim: validity
+    severity: high
+    description: email 必须形如 a@b.c，允许 1% 脏数据
+    sql: |
+      SELECT id, email FROM ${table}
+      WHERE ${partition} AND (email IS NULL OR email NOT GLOB '*@*.*')
+    mode: rows
+    threshold: 0.01
+
+  - name: 负数年龄明细
+    source: users
+    dim: validity
+    severity: high
+    description: age 不允许为负数
+    sql: |
+      SELECT id, name, age FROM ${table}
+      WHERE ${partition} AND age < 0
+    mode: rows
+
+  - name: 主键重复明细
+    source: users
+    dim: uniqueness
+    severity: high
+    sql: |
+      SELECT id, COUNT(*) AS dup_cnt FROM ${table}
+      WHERE ${partition} AND id IS NOT NULL
+      GROUP BY id HAVING COUNT(*) > 1
+    mode: rows
+
+  # ---------------- 快捷方式（自动生成 SQL） ----------------
+  - name: 用户 id 非空
+    source: users
+    dim: completeness
+    severity: high
+    type: not_null
+    column: id
+
+  - name: 年龄区间
+    source: users
+    dim: validity
+    severity: medium
+    type: range
+    column: age
+    min: 0
+    max: 120
+
+  - name: 行数下限
+    source: users
+    dim: completeness
+    severity: medium
+    type: row_count
+    min: 100

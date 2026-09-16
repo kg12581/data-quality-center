@@ -1,0 +1,235 @@
+# 华为南方工厂：制造执行（MES）与质检数据质量规则集（Hive / HiveServer2）
+#
+# 数据源连接写在 .env 里（参考 .env.example 的「华为南方工厂 Hive」段）：
+#   DQ_CONN_HUAWEI_HIVE_HOST=10.10.20.5
+#   DQ_CONN_HUAWEI_HIVE_DATABASE=ods_mes
+#   DQ_CONN_HUAWEI_HIVE_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar:/opt/jdbc/hadoop-common.jar
+#
+# 跑批（每日 T+1）建议指定分区：
+#   python main.py --case 华为南方工厂_制造数据质量 \
+#     --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
+name: 华为南方工厂_制造数据质量
+description: 工单/生产报工/设备/质检四类数据：唯一性、数量勾稽、良率与不良率、设备状态、时间逻辑、分区完整性
+version: 1
+
+vars:
+  partition: "1=1"        # 生产上建议传具体分区，例如 dt = '2026-09-16'
+  bizdate: "2026-09-16"   # 业务日期
+  defect_rate_limit: "0.02"   # 不良率上限 2%
+
+sources:
+  work_order:             # 工单表（日增量）
+    type: hive
+    conn: huawei_hive
+    table: ods_mes_work_order_di
+  production:             # 生产报工表
+    type: hive
+    conn: huawei_hive
+    table: ods_mes_production_di
+  equipment:              # 设备主数据（日全量）
+    type: hive
+    conn: huawei_hive
+    table: ods_mes_equipment_df
+  inspection:             # 质检记录
+    type: hive
+    conn: huawei_hive
+    table: ods_qc_inspection_di
+
+checks:
+  # ---------------- 工单 ----------------
+  - name: 工单号唯一
+    source: work_order
+    dim: uniqueness
+    severity: high
+    description: work_order_no 是主键，不允许重复
+    sql: |
+      SELECT work_order_no, COUNT(*) AS dup_cnt FROM ${table}
+      WHERE ${partition} AND work_order_no IS NOT NULL
+      GROUP BY work_order_no HAVING COUNT(*) > 1
+    mode: rows
+
+  - name: 工单号非空
+    source: work_order
+    dim: completeness
+    severity: high
+    type: not_null
+    column: work_order_no
+
+  - name: 计划数量必须大于零
+    source: work_order
+    dim: validity
+    severity: high
+    sql: |
+      SELECT work_order_no, plan_qty FROM ${table}
+      WHERE ${partition} AND (plan_qty IS NULL OR plan_qty <= 0)
+    mode: rows
+
+  - name: 完成数量不得超过计划数量
+    source: work_order
+    dim: consistency
+    severity: high
+    description: 超产允许 0.1% 的例外（少量试产/补投）
+    sql: |
+      SELECT work_order_no, plan_qty, finished_qty FROM ${table}
+      WHERE ${partition} AND NVL(finished_qty, 0) > plan_qty
+    mode: rows
+    threshold: 0.001
+
+  - name: 工单状态枚举合法
+    source: work_order
+    dim: validity
+    severity: high
+    description: 只允许 CREATED / RELEASED / IN_PROGRESS / CLOSED / CANCELLED
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition}
+        AND work_status NOT IN ('CREATED','RELEASED','IN_PROGRESS','CLOSED','CANCELLED')
+    expected: 0
+
+  - name: 工单计划时间逻辑正确
+    source: work_order
+    dim: consistency
+    severity: medium
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND plan_start_time > plan_end_time
+    expected: 0
+
+  # ---------------- 生产报工 ----------------
+  - name: 生产数量等于良品加不良
+    source: production
+    dim: consistency
+    severity: high
+    description: total_qty = good_qty + defect_qty
+    sql: |
+      SELECT record_id, work_order_no, total_qty, good_qty, defect_qty FROM ${table}
+      WHERE ${partition} AND NVL(total_qty, 0) <> NVL(good_qty, 0) + NVL(defect_qty, 0)
+    mode: rows
+
+  - name: 良率取值合法
+    source: production
+    dim: validity
+    severity: high
+    description: yield_rate 必须落在 (0, 1] 区间
+    sql: |
+      SELECT record_id, good_qty, total_qty, yield_rate FROM ${table}
+      WHERE ${partition} AND (yield_rate IS NULL OR yield_rate <= 0 OR yield_rate > 1)
+    mode: rows
+
+  - name: 良率与数量不一致
+    source: production
+    dim: accuracy
+    severity: medium
+    description: 写入的 yield_rate 与 good_qty/total_qty 的偏差不得超过 0.5%
+    sql: |
+      SELECT record_id, total_qty, good_qty, yield_rate FROM ${table}
+      WHERE ${partition} AND total_qty > 0
+        AND ABS(yield_rate - CAST(good_qty AS DOUBLE) / CAST(total_qty AS DOUBLE)) > 0.005
+    mode: rows
+    threshold: 0.002
+
+  - name: 不良率不超过上限
+    source: production
+    dim: accuracy
+    severity: medium
+    description: 良品数/总数 得到的不良率不得超过 defect_rate_limit（默认 2%）
+    sql: |
+      SELECT work_order_no, total_qty, defect_qty FROM ${table}
+      WHERE ${partition} AND total_qty > 0
+        AND CAST(defect_qty AS DOUBLE) / CAST(total_qty AS DOUBLE) > CAST('${defect_rate_limit}' AS DOUBLE)
+    mode: rows
+    threshold: 0.02
+
+  - name: 报工时间逻辑正确
+    source: production
+    dim: consistency
+    severity: high
+    sql: |
+      SELECT record_id, start_time, end_time FROM ${table}
+      WHERE ${partition} AND start_time > end_time
+    mode: rows
+
+  - name: 报工时间不得晚于业务日期
+    source: production
+    dim: timeliness
+    severity: medium
+    description: 当日分区的报工时间不应出现未来日期
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND TO_DATE(start_time) > TO_DATE('${bizdate}')
+    expected: 0
+
+  - name: 当日产线覆盖足够
+    source: production
+    dim: completeness
+    severity: medium
+    description: 当日至少有 5 条产线有报工数据
+    sql: |
+      SELECT COUNT(DISTINCT line_code) AS line_cnt FROM ${table}
+      WHERE ${partition}
+    expected: 5
+    operator: gte
+
+  # ---------------- 设备主数据 ----------------
+  - name: 设备编码唯一
+    source: equipment
+    dim: uniqueness
+    severity: high
+    sql: |
+      SELECT equipment_code, COUNT(*) AS dup_cnt FROM ${table}
+      WHERE ${partition} AND equipment_code IS NOT NULL
+      GROUP BY equipment_code HAVING COUNT(*) > 1
+    mode: rows
+
+  - name: 设备状态枚举合法
+    source: equipment
+    dim: validity
+    severity: high
+    description: 只允许 RUN / IDLE / DOWN / MAINT / PM
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND equipment_status NOT IN ('RUN','IDLE','DOWN','MAINT','PM')
+    expected: 0
+
+  - name: 停机时长取值合法
+    source: equipment
+    dim: validity
+    severity: medium
+    description: downtime_minutes 应在 0~1440 分钟之间
+    sql: |
+      SELECT equipment_code, downtime_minutes FROM ${table}
+      WHERE ${partition} AND (downtime_minutes < 0 OR downtime_minutes > 1440)
+    mode: rows
+
+  # ---------------- 质检 ----------------
+  - name: 质检结果枚举合法
+    source: inspection
+    dim: validity
+    severity: high
+    description: 只允许 PASS / FAIL / NA
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND inspect_result NOT IN ('PASS','FAIL','NA')
+    expected: 0
+
+  - name: 判定不良必须填写不良代码
+    source: inspection
+    dim: completeness
+    severity: high
+    description: inspect_result = FAIL 时 defect_code 不能为空
+    sql: |
+      SELECT inspection_id, work_order_no, inspect_result, defect_code FROM ${table}
+      WHERE ${partition} AND inspect_result = 'FAIL'
+        AND (defect_code IS NULL OR TRIM(defect_code) = '')
+    mode: rows
+
+  # ---------------- 分区完整性 ----------------
+  - name: 报工分区必须有数据
+    source: production
+    dim: completeness
+    severity: high
+    description: 当日分区为空说明上游跑批异常
+    sql: |
+      SELECT COUNT(*) FROM ${table} WHERE ${partition}
+    expected: 1
+    operator: gte

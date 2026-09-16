@@ -1,0 +1,217 @@
+# 中华保险：承保 / 理赔 / 客户 主数据质量规则集（阿里云 MaxCompute / ODPS）
+#
+# 数据源连接写在 .env 里（参考 .env.example 的「中华保险 ODPS」段）：
+#   DQ_CONN_ZHONGHUA_ODPS_PROJECT=zhonghua_ods
+#   DQ_CONN_ZHONGHUA_ODPS_USER=your_access_id
+#   DQ_CONN_ZHONGHUA_ODPS_PASSWORD=your_access_key
+#
+# 跑批（T+1）建议指定分区和业务日期：
+#   python main.py --case 中华保险_业务数据质量 \
+#     --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
+name: 中华保险_业务数据质量
+description: 保单/赔案/客户三类主数据：唯一性、非空、金额与日期合法性、保费勾稽、分区完整性与及时性
+version: 1
+
+vars:
+  partition: "1=1"        # 生产上建议传具体分区，例如 dt = '2026-09-16'
+  bizdate: "2026-09-16"   # 业务日期：用于分组对照与及时性检查
+
+sources:
+  policy:                 # 保单表（日增量分区）
+    type: odps
+    conn: zhonghua_odps
+    table: ods_policy_di
+  claim:                  # 赔案表
+    type: odps
+    conn: zhonghua_odps
+    table: ods_claim_di
+  customer:               # 客户表
+    type: odps
+    conn: zhonghua_odps
+    table: ods_customer_di
+
+checks:
+  # ---------------- 保单：唯一性 / 完整性 ----------------
+  - name: 保单号唯一
+    source: policy
+    dim: uniqueness
+    severity: high
+    description: policy_no 是主键，不允许重复
+    sql: |
+      SELECT policy_no, COUNT(*) AS dup_cnt
+      FROM ${table}
+      WHERE ${partition} AND policy_no IS NOT NULL
+      GROUP BY policy_no HAVING COUNT(*) > 1
+    mode: rows
+
+  - name: 保单号非空
+    source: policy
+    dim: completeness
+    severity: high
+    type: not_null
+    column: policy_no
+
+  - name: 保单号格式合法
+    source: policy
+    dim: validity
+    severity: high
+    description: 保单号形如 P + 12 位数字，允许 0.1% 的例外
+    sql: |
+      SELECT policy_no FROM ${table}
+      WHERE ${partition} AND policy_no NOT REGEXP '^P[0-9]{12}$'
+    mode: rows
+    threshold: 0.001
+
+  # ---------------- 保单：金额与日期 ----------------
+  - name: 保费不得为负
+    source: policy
+    dim: validity
+    severity: high
+    sql: |
+      SELECT policy_no, premium FROM ${table}
+      WHERE ${partition} AND premium < 0
+    mode: rows
+
+  - name: 保额必须大于零
+    source: policy
+    dim: validity
+    severity: medium
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND (insured_amount IS NULL OR insured_amount <= 0)
+    expected: 0
+
+  - name: 起保日期不得晚于终保日期
+    source: policy
+    dim: consistency
+    severity: high
+    sql: |
+      SELECT policy_no, start_date, end_date FROM ${table}
+      WHERE ${partition} AND start_date > end_date
+    mode: rows
+
+  - name: 保单状态枚举合法
+    source: policy
+    dim: validity
+    severity: high
+    description: 只允许 ACTIVE / EXPIRED / SURRENDER / LAPSED / PENDING
+    sql: |
+      SELECT policy_status, COUNT(*) AS cnt FROM ${table}
+      WHERE ${partition} AND policy_status NOT IN ('ACTIVE','EXPIRED','SURRENDER','LAPSED','PENDING')
+      GROUP BY policy_status
+    mode: rows
+
+  - name: 险种代码非空
+    source: policy
+    dim: completeness
+    severity: medium
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND (product_code IS NULL OR TRIM(product_code) = '')
+    expected: 0
+
+  # ---------------- 保单：保费勾稽（应收 = 实收 + 欠收）----------------
+  - name: 保费勾稽平衡
+    source: policy
+    dim: consistency
+    severity: high
+    description: due_premium 应等于 paid_premium + unpaid_premium（容差 0.01 元）
+    sql: |
+      SELECT policy_no, due_premium, paid_premium, unpaid_premium
+      FROM ${table}
+      WHERE ${partition}
+        AND ABS(NVL(due_premium, 0) - (NVL(paid_premium, 0) + NVL(unpaid_premium, 0))) > 0.01
+    mode: rows
+    threshold: 0.001
+
+  # ---------------- 客户主数据 ----------------
+  - name: 客户证件号唯一
+    source: customer
+    dim: uniqueness
+    severity: high
+    sql: |
+      SELECT cert_no, COUNT(*) AS dup_cnt FROM ${table}
+      WHERE ${partition} AND cert_no IS NOT NULL
+      GROUP BY cert_no HAVING COUNT(*) > 1
+    mode: rows
+
+  - name: 证件号格式合法
+    source: customer
+    dim: validity
+    severity: medium
+    description: 15 位或 18 位身份证号
+    sql: |
+      SELECT customer_id, cert_no FROM ${table}
+      WHERE ${partition} AND cert_no NOT REGEXP '^([0-9]{15}|[0-9]{17}[0-9Xx])$'
+    mode: rows
+    threshold: 0.002
+
+  - name: 手机号格式合法
+    source: customer
+    dim: validity
+    severity: medium
+    description: 11 位手机号，允许 0.5% 的历史脏数据
+    sql: |
+      SELECT customer_id, mobile FROM ${table}
+      WHERE ${partition} AND mobile IS NOT NULL AND mobile NOT REGEXP '^1[3-9][0-9]{9}$'
+    mode: rows
+    threshold: 0.005
+
+  # ---------------- 理赔：日期逻辑 / 状态 / 金额 ----------------
+  - name: 赔案日期逻辑正确
+    source: claim
+    dim: consistency
+    severity: high
+    description: 出险日期 <= 报案日期；已结案时 报案日期 <= 结案日期
+    sql: |
+      SELECT claim_no, accident_date, report_date, close_date FROM ${table}
+      WHERE ${partition}
+        AND (accident_date > report_date
+             OR (close_date IS NOT NULL AND report_date > close_date))
+    mode: rows
+
+  - name: 赔案状态枚举合法
+    source: claim
+    dim: validity
+    severity: high
+    description: 只允许 REPORTED / SURVEYING / APPROVED / REJECTED / CLOSED
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition}
+        AND claim_status NOT IN ('REPORTED','SURVEYING','APPROVED','REJECTED','CLOSED')
+    expected: 0
+
+  - name: 赔付金额不得超过保额
+    source: claim
+    dim: accuracy
+    severity: high
+    description: 赔案与保单按保单号关联（同项目同分区），赔付金额不得超过保额
+    sql: |
+      SELECT c.claim_no, c.policy_no, c.paid_amount, p.insured_amount
+      FROM ods_claim_di c
+      JOIN ods_policy_di p ON c.policy_no = p.policy_no
+      WHERE c.dt = '${bizdate}' AND p.dt = '${bizdate}'
+        AND NVL(c.paid_amount, 0) > NVL(p.insured_amount, 0)
+    mode: rows
+
+  # ---------------- 分区完整性 / 及时性 ----------------
+  - name: 保单分区必须有数据
+    source: policy
+    dim: completeness
+    severity: high
+    description: T+1 跑批时该分区不应为空
+    sql: |
+      SELECT COUNT(*) FROM ${table} WHERE ${partition}
+    expected: 1
+    operator: gte
+
+  - name: 保单分区日期及时
+    source: policy
+    dim: timeliness
+    severity: medium
+    description: 分区内最大 dt 应等于业务日期（说明当天数据已产出）
+    sql: |
+      SELECT COUNT(*) FROM (
+        SELECT MAX(dt) AS max_dt FROM ${table} WHERE ${partition}
+      ) t WHERE max_dt <> '${bizdate}'
+    expected: 0

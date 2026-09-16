@@ -1,0 +1,19 @@
+# 核心依赖
+pandas>=1.5
+PyYAML>=6.0
+
+# 可选：数据库连接（sqlite 用标准库，其它数据库需要 SQLAlchemy）
+SQLAlchemy>=2.0
+# 可选：大数据 JDBC 连接（还需要 JDK 与各系统驱动 jar）
+# jaydebeapi>=1.2
+# JPype1>=1.5
+# 可选：关系库纯 Python 驱动
+# PyMySQL>=1.1          # mysql / doris
+# psycopg2-binary>=2.9  # postgresql
+# oracledb>=2.0         # oracle
+# pyodps>=0.11          # 阿里云 MaxCompute
+# 可选：控制台表格更整齐、测试
+tabulate>=0.9
+pytest>=7.0
+# 可选：按 Hive / Spark 等方言做 SQL 语法自检（tests/test_business_cases.py 会用到）
+# sqlglot>=25

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-quality-center"
+version = "3.0.0"
+description = "规则写在 YAML 的数据质量校验工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pandas>=1.5", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+db = ["SQLAlchemy>=2.0"]
+bigdata = ["SQLAlchemy>=2.0", "jaydebeapi>=1.2", "JPype1>=1.5"]
+mysql = ["PyMySQL>=1.1"]
+postgresql = ["psycopg2-binary>=2.9"]
+odps = ["pyodps>=0.11"]
+report = ["tabulate>=0.9"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["common"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

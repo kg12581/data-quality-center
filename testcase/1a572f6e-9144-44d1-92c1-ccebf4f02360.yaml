@@ -1,0 +1,98 @@
+# 大数据 / 外部库的连接写法：YAML 只写「用哪个连接」，真正的 IP / 端口 / 账号 / jar 在 .env 里
+#   - 复制 .env.example 成 .env，改好连接信息（.env 不会提交到仓库）
+#   - 连接清单：python main.py --list-connectors；跑之前会打印当前用的 .env 和可用连接
+#   - 服务器上定时跑：python 大数据连接示例.py --env /opt/conf/prod.env
+name: 大数据连接示例
+description: hive / hudi / paimon / doris / mysql / postgresql / oracle / odps / 自定义 jdbc 的连接写法
+version: 1
+
+vars:
+  partition: "1=1"
+
+sources:
+  hive_dw:                       # 对应 .env 里的 DQ_CONN_DW_HIVE_*
+    type: hive
+    conn: dw_hive
+    table: dim_user
+
+  hudi_dw:                       # Hudi 没有独立 JDBC，经 Trino 查
+    type: hudi
+    conn: lake_trino
+    schema: dw
+    table: hudi_user_rt
+
+  paimon_dw:
+    type: paimon
+    conn: lake_trino
+    catalog: paimon
+    schema: dw
+    table: paimon_user
+
+  doris_dw:                      # Doris 走 MySQL 协议（9030）
+    type: doris
+    conn: doris_dw
+    table: dim_user
+
+  mysql_user:
+    type: mysql
+    conn: mysql_userdb
+    table: users
+
+  pg_dw:
+    type: postgresql
+    conn: pg_dw
+    table: dim_users
+
+  oracle_ods:
+    type: oracle
+    conn: oracle_ods
+    table: ods_user
+
+  odps_dw:                       # .env 里 BACKEND=pyodps 或 jdbc 都可以
+    type: odps
+    conn: odps_dw
+    table: dw_user
+
+  custom_jdbc:                   # 不想进 .env 的临时连接，也可以直接写在 YAML 里
+    type: jdbc
+    driver_class: com.example.jdbc.Driver
+    url_env: CUSTOM_JDBC_URL
+    table: some_table
+
+checks:
+  - name: hive 分区行数下限
+    source: hive_dw
+    dim: completeness
+    severity: high
+    sql: |
+      SELECT COUNT(*) AS row_count FROM ${table}
+      WHERE ${partition}
+    expected: "${min_rows}"
+    operator: gte
+    vars:
+      min_rows: 100
+
+  - name: hudi 主键重复明细
+    source: hudi_dw
+    dim: uniqueness
+    severity: high
+    sql: |
+      SELECT id, COUNT(*) AS dup_cnt FROM ${table}
+      WHERE ${partition} GROUP BY id HAVING COUNT(*) > 1
+    mode: rows
+
+  - name: odps 状态枚举合法
+    source: odps_dw
+    dim: validity
+    severity: high
+    sql: |
+      SELECT COUNT(*) FROM ${table}
+      WHERE ${partition} AND status NOT IN ('active','inactive')
+    expected: 0
+
+  - name: doris 用户 id 非空
+    source: doris_dw
+    dim: completeness
+    severity: high
+    type: not_null
+    column: id
