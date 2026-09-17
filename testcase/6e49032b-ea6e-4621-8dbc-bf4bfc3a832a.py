@@ -1,12 +1,12 @@
-"""中华保险_业务数据质量（用例名见同名 yaml 里的 name 字段）：
+"""保险_承保理赔数据质量（用例名见同名 yaml 里的 name 字段）：
 规则见同目录的「6e49032b-ea6e-4621-8dbc-bf4bfc3a832a.yaml」，数据源是阿里云 MaxCompute（ODPS）。
 
 运行方式：
   1) PyCharm 里直接 Run 这个文件（连接读仓库根目录的 .env）
   2) 跑批（T+1）：
        python 6e49032b-ea6e-4621-8dbc-bf4bfc3a832a.py \
-         --env /opt/conf/zhonghua.env --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
-  3) 主入口调用：python main.py --case 中华保险_业务数据质量
+         --env /opt/conf/ins.env --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
+  3) 主入口调用：python main.py --case 保险_承保理赔数据质量
 """
 
 import sys
@@ -18,7 +18,7 @@ import common
 
 # ============================ 本用例的配置 ============================
 YAML = Path(__file__).with_suffix(".yaml")     # 规则集文件
-ENV_FILE = None                                # 数据库连接配置：None = 仓库根目录 .env（也可写 /opt/conf/zhonghua.env）
+ENV_FILE = None                                # 数据库连接配置：None = 仓库根目录 .env（也可写 /opt/conf/ins.env）
 REPORT_FORMATS = ("json", "md", "html")        # 要生成哪几份报告
 OUTPUT_DIR = None                              # None = 仓库根目录 reports/
 EXTRA_VARS = {}                                # 额外变量，例如 {"partition": "dt = '2026-09-16'"}

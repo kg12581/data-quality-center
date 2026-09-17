@@ -3,13 +3,13 @@
 ``.env`` 里每个连接用前缀 ``DQ_CONN_<连接名>_<字段>``，例如::
 
     DQ_CONN_DW_HIVE_TYPE=hive                     # 也可以整串 URL
-    DQ_CONN_DW_HIVE_URL=jdbc:hive2://10.0.0.5:10000/dw
+    DQ_CONN_DW_HIVE_URL=jdbc:hive2://hive-server.example.com:10000/dw
     DQ_CONN_DW_HIVE_USER=etl
     DQ_CONN_DW_HIVE_PASSWORD=xxx
     DQ_CONN_DW_HIVE_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar
 
     DQ_CONN_DORIS_DW_TYPE=doris                   # 也可以分字段写
-    DQ_CONN_DORIS_DW_HOST=10.0.0.6
+    DQ_CONN_DORIS_DW_HOST=doris-fe.example.com
     DQ_CONN_DORIS_DW_PORT=9030
     DQ_CONN_DORIS_DW_DATABASE=dw
 

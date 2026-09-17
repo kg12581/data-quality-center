@@ -15,13 +15,13 @@ from common import db, env
 ENV_FILE = """\
 # 注释会被忽略
 export DQ_CONN_DW_HIVE_TYPE=hive
-DQ_CONN_DW_HIVE_URL="jdbc:hive2://10.0.0.5:10000/dw"
+DQ_CONN_DW_HIVE_URL="jdbc:hive2://hive-server.example.com:10000/dw"
 DQ_CONN_DW_HIVE_USER=etl
 DQ_CONN_DW_HIVE_PASSWORD='pwd#1'          # 引号里的内容原样保留
 DQ_CONN_DW_HIVE_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar
 
 DQ_CONN_DORIS_DW_TYPE=doris
-DQ_CONN_DORIS_DW_HOST=10.0.0.6
+DQ_CONN_DORIS_DW_HOST=doris-fe.example.com
 DQ_CONN_DORIS_DW_PORT=9030
 DQ_CONN_DORIS_DW_DATABASE=dw
 DQ_CONN_DORIS_DW_USER=etl
@@ -49,7 +49,7 @@ def write_env(tmp_path: Path, body: str = ENV_FILE) -> Path:
 
 def test_parse_env_file(tmp_path):
     values = env.parse_env_file(write_env(tmp_path))
-    assert values["DQ_CONN_DW_HIVE_URL"] == "jdbc:hive2://10.0.0.5:10000/dw"
+    assert values["DQ_CONN_DW_HIVE_URL"] == "jdbc:hive2://hive-server.example.com:10000/dw"
     assert values["DQ_CONN_DW_HIVE_PASSWORD"] == "pwd#1"
     assert all(not key.startswith("#") for key in values)
 
@@ -60,23 +60,23 @@ def test_multiple_connections_and_yaml_reference(tmp_path):
 
     source = db.with_conn({"conn": "dw_hive", "table": "dim_user", "type": "hive"})
     params = db.resolve(source)
-    assert params["url"] == "jdbc:hive2://10.0.0.5:10000/dw"
+    assert params["url"] == "jdbc:hive2://hive-server.example.com:10000/dw"
     assert params["driver"] == "org.apache.hive.jdbc.HiveDriver"
     assert params["user"] == "etl"
     assert params["jars"] == [str(tmp_path / "hive-jdbc.jar")]
 
     doris = db.resolve({"conn": "doris_dw"})           # type 来自 .env
-    assert doris["url"] == "mysql+pymysql://etl:secret@10.0.0.6:9030/dw"
+    assert doris["url"] == "mysql+pymysql://etl:secret@doris-fe.example.com:9030/dw"
 
 
 def test_env_var_overrides_env_file_and_conns_win(tmp_path, monkeypatch):
     env.configure(env_file=write_env(tmp_path))
-    monkeypatch.setenv("DQ_CONN_DORIS_DW_HOST", "10.9.9.9")
-    assert "10.9.9.9" in db.resolve({"conn": "doris_dw"})["url"]
+    monkeypatch.setenv("DQ_CONN_DORIS_DW_HOST", "doris-override.example.com")
+    assert "doris-override.example.com" in db.resolve({"conn": "doris_dw"})["url"]
 
     env.configure(env_file=write_env(tmp_path),
-                  conns={"doris_dw": {"host": "127.0.0.1", "port": 9031}})
-    assert "127.0.0.1:9031" in db.resolve({"conn": "doris_dw"})["url"]
+                  conns={"doris_dw": {"host": "doris-cli.example.com", "port": 9031}})
+    assert "doris-cli.example.com:9031" in db.resolve({"conn": "doris_dw"})["url"]
 
 
 def test_missing_conn_is_reported_early(tmp_path):

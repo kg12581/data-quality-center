@@ -1,14 +1,14 @@
-# 华为南方工厂：制造执行（MES）与质检数据质量规则集（Hive / HiveServer2）
+# 制造业工厂示例：制造执行（MES）与质检数据质量规则集（Hive / HiveServer2）
 #
-# 数据源连接写在 .env 里（参考 .env.example 的「华为南方工厂 Hive」段）：
-#   DQ_CONN_HUAWEI_HIVE_HOST=10.10.20.5
-#   DQ_CONN_HUAWEI_HIVE_DATABASE=ods_mes
-#   DQ_CONN_HUAWEI_HIVE_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar:/opt/jdbc/hadoop-common.jar
+# 数据源连接写在 .env 里（参考 .env.example 的「制造业 Hive」段）：
+#   DQ_CONN_HIVE_MFG_HOST=hive-server.example.com
+#   DQ_CONN_HIVE_MFG_DATABASE=ods_mfg
+#   DQ_CONN_HIVE_MFG_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar:/opt/jdbc/hadoop-common.jar
 #
 # 跑批（每日 T+1）建议指定分区：
-#   python main.py --case 华为南方工厂_制造数据质量 \
+#   python main.py --case 制造业_工单制造数据质量 \
 #     --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
-name: 华为南方工厂_制造数据质量
+name: 制造业_工单制造数据质量
 description: 工单/生产报工/设备/质检四类数据：唯一性、数量勾稽、良率与不良率、设备状态、时间逻辑、分区完整性
 version: 1
 
@@ -20,19 +20,19 @@ vars:
 sources:
   work_order:             # 工单表（日增量）
     type: hive
-    conn: huawei_hive
-    table: ods_mes_work_order_di
+    conn: hive_mfg
+    table: ods_work_order_di
   production:             # 生产报工表
     type: hive
-    conn: huawei_hive
-    table: ods_mes_production_di
+    conn: hive_mfg
+    table: ods_production_di
   equipment:              # 设备主数据（日全量）
     type: hive
-    conn: huawei_hive
-    table: ods_mes_equipment_df
+    conn: hive_mfg
+    table: ods_equipment_df
   inspection:             # 质检记录
     type: hive
-    conn: huawei_hive
+    conn: hive_mfg
     table: ods_qc_inspection_di
 
 checks:

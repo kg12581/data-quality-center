@@ -1,4 +1,4 @@
-"""业务规则集自检：中华保险（ODPS）与华为南方工厂（Hive）。
+"""业务规则集自检：保险行业示例（ODPS）与制造业工厂示例（Hive）。
 
 没有真实集群也能做的两件事：
   1) 规则集配置能加载（字段、变量、枚举都合法）
@@ -14,8 +14,8 @@ from common import checks
 
 sqlglot = pytest.importorskip("sqlglot", reason="需要 sqlglot 才能做 SQL 语法自检：pip install sqlglot")
 
-INSURANCE = "中华保险_业务数据质量"
-MANUFACTURING = "华为南方工厂_制造数据质量"
+INSURANCE = "保险_承保理赔数据质量"
+MANUFACTURING = "制造业_工单制造数据质量"
 CASES = {
     INSURANCE: {"sources": {"policy", "claim", "customer"}, "min_checks": 15},
     MANUFACTURING: {"sources": {"work_order", "production", "equipment", "inspection"},

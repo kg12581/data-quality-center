@@ -1,12 +1,12 @@
-"""华为南方工厂_制造数据质量（用例名见同名 yaml 里的 name 字段）：
+"""制造业_工单制造数据质量（用例名见同名 yaml 里的 name 字段）：
 规则见同目录的「4d1c7884-d049-48a4-bd86-17fdbd95f495.yaml」，数据源是 Hive（HiveServer2）。
 
 运行方式：
   1) PyCharm 里直接 Run 这个文件（连接读仓库根目录的 .env）
   2) 跑批：
        python 4d1c7884-d049-48a4-bd86-17fdbd95f495.py \
-         --env /opt/conf/huawei.env --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
-  3) 主入口调用：python main.py --case 华为南方工厂_制造数据质量
+         --env /opt/conf/mfg.env --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
+  3) 主入口调用：python main.py --case 制造业_工单制造数据质量
 """
 
 import sys
@@ -18,7 +18,7 @@ import common
 
 # ============================ 本用例的配置 ============================
 YAML = Path(__file__).with_suffix(".yaml")     # 规则集文件
-ENV_FILE = None                                # 数据库连接配置：None = 仓库根目录 .env（也可写 /opt/conf/huawei.env）
+ENV_FILE = None                                # 数据库连接配置：None = 仓库根目录 .env（也可写 /opt/conf/mfg.env）
 REPORT_FORMATS = ("json", "md", "html")        # 要生成哪几份报告
 OUTPUT_DIR = None                              # None = 仓库根目录 reports/
 EXTRA_VARS = {}                                # 额外变量，例如 {"partition": "dt = '2026-09-16'"}

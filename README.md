@@ -21,8 +21,8 @@ data-quality-center/
 │   ├── bec36bd4-….yaml / .py          #   用户数据质量（干净数据）
 │   ├── 4c307f9c-….yaml / .py          #   用户数据质量_脏数据（演示失败、退出码 1）
 │   └── 1a572f6e-….yaml / .py          #   大数据连接示例（hive/hudi/odps/doris/…）
-│   ├── 6e49032b-….yaml / .py          #   中华保险_业务数据质量（ODPS：保单/赔案/客户）
-│   └── 4d1c7884-….yaml / .py          #   华为南方工厂_制造数据质量（Hive：工单/报工/设备/质检）
+│   ├── 6e49032b-….yaml / .py          #   保险_承保理赔数据质量（ODPS：保单/赔案/客户）
+│   └── 4d1c7884-….yaml / .py          #   制造业_工单制造数据质量（Hive：工单/报工/设备/质检）
 ├── data/                        # 测试数据（csv）
 ├── reports/                     # 生成的报告（文件名 = 规则集名）
 ├── tests/                       # pytest（只测 common/，不参与运行，可删）
@@ -56,27 +56,28 @@ data-quality-center/
 
 | uuid | 用例名 | 数据源 | 规则数 | 覆盖内容 |
 | --- | --- | --- | --- | --- |
-| `6e49032b-ea6e-4621-8dbc-bf4bfc3a832a` | 中华保险_业务数据质量 | **ODPS / MaxCompute**（保单 `ods_policy_di`、赔案 `ods_claim_di`、客户 `ods_customer_di`） | 17 | 保单号/证件号唯一与非空、保单号与证件号/手机号格式、保费非负、保额>0、起终保日期逻辑、保单与赔案状态枚举、保费勾稽（应收=实收+欠收）、赔案日期逻辑、赔付不超保额（跨表关联）、分区完整性与及时性 |
-| `4d1c7884-d049-48a4-bd86-17fdbd95f495` | 华为南方工厂_制造数据质量 | **Hive**（工单 `ods_mes_work_order_di`、报工 `ods_mes_production_di`、设备 `ods_mes_equipment_df`、质检 `ods_qc_inspection_di`） | 19 | 工单号唯一与非空、计划数量>0、完成不超计划、生产数=良品+不良、良率区间与口径一致、不良率上限（阈值参数化）、报工时间逻辑与未来日期、产线覆盖数、设备编码唯一、设备状态与停机时长、质检结果枚举与不良代码完整性、分区完整性 |
+| `6e49032b-ea6e-4621-8dbc-bf4bfc3a832a` | 保险_承保理赔数据质量 | **ODPS / MaxCompute**（保单 `ods_policy_di`、赔案 `ods_claim_di`、客户 `ods_customer_di`） | 17 | 保单号/证件号唯一与非空、保单号与证件号/手机号格式、保费非负、保额>0、起终保日期逻辑、保单与赔案状态枚举、保费勾稽（应收=实收+欠收）、赔案日期逻辑、赔付不超保额（跨表关联）、分区完整性与及时性 |
+| `4d1c7884-d049-48a4-bd86-17fdbd95f495` | 制造业_工单制造数据质量 | **Hive**（工单 `ods_work_order_di`、报工 `ods_production_di`、设备 `ods_equipment_df`、质检 `ods_qc_inspection_di`） | 19 | 工单号唯一与非空、计划数量>0、完成不超计划、生产数=良品+不良、良率区间与口径一致、不良率上限（阈值参数化）、报工时间逻辑与未来日期、产线覆盖数、设备编码唯一、设备状态与停机时长、质检结果枚举与不良代码完整性、分区完整性 |
 
 跑法（按天 T+1 建议显式指定分区和业务日期）：
 
 ```bash
-# 中华保险（ODPS）
-python main.py --case 中华保险_业务数据质量 \
+# 保险行业（ODPS）
+python main.py --case 保险_承保理赔数据质量 \
   --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
 
-# 华为南方工厂（Hive）
-python main.py --case 华为南方工厂_制造数据质量 \
+# 制造业（Hive）
+python main.py --case 制造业_工单制造数据质量 \
   --var partition="dt = '2026-09-16'" --var bizdate=2026-09-16
 
 # 服务器定时任务（连接配置放服务器上）
-python testcase/6e49032b-ea6e-4621-8dbc-bf4bfc3a832a.py --env /opt/conf/zhonghua.env \
+python testcase/6e49032b-ea6e-4621-8dbc-bf4bfc3a832a.py --env /opt/conf/ins.env \
   --var partition="dt = '2026-09-16'" --report json,md -o /data/dq/reports
 ```
 
-连接信息在 `.env.example` 里已经写好两段（`DQ_CONN_ZHONGHUA_ODPS_*`、`DQ_CONN_HUAWEI_HIVE_*`），
-复制成 `.env` 填上真实值即可；规则集里只引用连接名（`conn: zhonghua_odps` / `conn: huawei_hive`）。
+连接信息在 `.env.example` 里已经写好两段（`DQ_CONN_ODPS_DW_*`、`DQ_CONN_HIVE_MFG_*`），
+复制成 `.env` 填上真实值即可；规则集里只引用连接名（`conn: odps_dw` / `conn: hive_mfg`）。
+仓库里所有主机、项目、账号、表名都是示例占位（`*.example.com` / `your_access_id` / `change_me`），不含任何真实环境信息。
 
 ## 怎么运行
 
@@ -203,13 +204,13 @@ cp .env.example .env
 ```ini
 # 一个连接一段，名字随便起（这里是 dw_hive、doris_dw）
 DQ_CONN_DW_HIVE_TYPE=hive
-DQ_CONN_DW_HIVE_URL=jdbc:hive2://10.0.0.5:10000/dw      # 也可以分字段写
+DQ_CONN_DW_HIVE_URL=jdbc:hive2://hive-server.example.com:10000/dw   # 也可以分字段写
 DQ_CONN_DW_HIVE_USER=etl
 DQ_CONN_DW_HIVE_PASSWORD=xxx
 DQ_CONN_DW_HIVE_DRIVER_PATH=/opt/jdbc/hive-jdbc.jar
 
 DQ_CONN_DORIS_DW_TYPE=doris
-DQ_CONN_DORIS_DW_HOST=10.0.0.6
+DQ_CONN_DORIS_DW_HOST=doris-fe.example.com
 DQ_CONN_DORIS_DW_PORT=9030
 DQ_CONN_DORIS_DW_DATABASE=dw
 DQ_CONN_DORIS_DW_USER=etl
