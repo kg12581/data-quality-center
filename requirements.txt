@@ -17,3 +17,5 @@ tabulate>=0.9
 pytest>=7.0
 # 可选：按 Hive / Spark 等方言做 SQL 语法自检（tests/test_business_cases.py 会用到）
 # sqlglot>=25
+# 可选：代码风格检查（make lint / ruff check .）
+# ruff>=0.6

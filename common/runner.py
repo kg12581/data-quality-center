@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from fnmatch import fnmatch
-from typing import Any, Mapping
+from typing import Any
 
 from . import checks, db
 from .config import Config
@@ -65,14 +66,19 @@ def select_checks(checks: list, only: Any = None) -> list:
 
 
 def run(config: Config, variables: Mapping[str, Any] | None = None, on_result=None,
-        only: Any = None) -> dict:
-    """执行规则，返回报告字典（summary + results）。``only`` 可以只跑指定的几条规则。"""
+        only: Any = None, include_sql: bool = False, fail_on_warn: bool = False) -> dict:
+    """执行规则，返回报告字典（summary + results）。
+
+    - ``only``：只跑指定的几条规则
+    - ``include_sql``：结果里带上渲染后的 SQL（排查用）
+    - ``fail_on_warn``：warn 级失败也让退出码变成 1（默认只看 error 级）
+    """
     started = time.perf_counter()
     sources = Sources(config)
     results = []
     try:
         for check in select_checks(config.enabled_checks(), only):
-            result = checks.run_check(check, sources, variables)
+            result = checks.run_check(check, sources, variables, include_sql=include_sql)
             results.append(result)
             if callable(on_result):
                 on_result(result)
@@ -85,21 +91,40 @@ def run(config: Config, variables: Mapping[str, Any] | None = None, on_result=No
         "config": str(config.path or ""),
         "time": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-        "summary": _summarize(results),
+        "summary": _summarize(results, fail_on_warn=fail_on_warn),
         "results": [item.to_dict() for item in results],
+        "sources": _source_info(config),
     }
 
 
-def _summarize(results) -> dict:
+def _source_info(config: Config) -> list:
+    """数据源清单（只含名字/类型/连接名/表名，不含主机与账号），便于审计与排查。"""
+    info = []
+    for name, source in config.sources.items():
+        info.append({
+            "name": name,
+            "type": db._kind(source) or str(source.get("type", "")),
+            "conn": str(source.get("conn") or ""),
+            "table": str(source.get("table") or ""),
+        })
+    return info
+
+
+def _summarize(results, fail_on_warn: bool = False) -> dict:
     """统计通过 / 失败 / 错误、按维度汇总，并给出退出码。"""
     by_dim: dict = {}
+    by_severity: dict = {level: {"passed": 0, "failed": 0, "errors": 0}
+                         for level in ("error", "warn", "info")}
     blocking: list = []
     for item in results:
         bucket = by_dim.setdefault(item.dim or "未标注", {"total": 0, "passed": 0, "failed": 0, "errors": 0})
         bucket["total"] += 1
-        bucket[{"PASS": "passed", "FAIL": "failed", "ERROR": "errors"}[item.status]] += 1
-        # severity=error 的失败（或没法执行）会让退出码变成 1
-        if item.severity == "error" and item.status in ("FAIL", "ERROR"):
+        key = {"PASS": "passed", "FAIL": "failed", "ERROR": "errors"}[item.status]
+        bucket[key] += 1
+        by_severity.setdefault(item.severity, {"passed": 0, "failed": 0, "errors": 0})[key] += 1
+        # 默认：severity=error 的失败（或没法执行）让退出码变 1；fail_on_warn=True 时 warn 也算
+        blocking_levels = ("error", "warn") if fail_on_warn else ("error",)
+        if item.severity in blocking_levels and item.status in ("FAIL", "ERROR"):
             blocking.append(item.name)
     return {
         "total": len(results),
@@ -110,4 +135,6 @@ def _summarize(results) -> dict:
         "exit_code": 1 if blocking else 0,
         "blocking": blocking,
         "by_dim": by_dim,
+        "by_severity": by_severity,
+        "fail_on_warn": bool(fail_on_warn),
     }

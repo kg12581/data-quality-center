@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
+import json
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import yaml
 
@@ -162,7 +165,9 @@ def run_case(case: Any, variables: Mapping[str, Any] | None = None,
              formats: Iterable[str] = DEFAULT_FORMATS, output_dir: Any = None,
              show_console: bool = True, failed_rows: bool = False,
              strict_fields: bool = False, only: Any = None,
-             env_file: Any = None, conns: Mapping[str, Any] | None = None) -> dict:
+             env_file: Any = None, conns: Mapping[str, Any] | None = None,
+             include_sql: bool = False, fail_on_warn: bool = False,
+             archive: bool = False, archive_dir: Any = None) -> dict:
     """跑一个规则集：读同名 YAML → 执行规则 → 报告写到 ``reports/<规则集名>.*``。
 
     testcase 里的 py 一般会自己分步调用（load_rules / run / write_reports），
@@ -171,13 +176,33 @@ def run_case(case: Any, variables: Mapping[str, Any] | None = None,
     yaml_path = case_yaml(case)
     name = yaml_path.stem
     config = load_rules(yaml_path, env_file=env_file, conns=conns, strict_fields=strict_fields)
-    report = run(config, variables=variables, only=only)
-    written = write_reports(report, output_dir or REPORT_DIR, formats, prefix=name)
+    report = run(config, variables=variables, only=only,
+                 include_sql=include_sql, fail_on_warn=fail_on_warn)
+    written = write_reports(report, output_dir or REPORT_DIR, formats, prefix=name,
+                            archive=archive, archive_dir=archive_dir)
     if show_console:
         print(render_console(report, failed_rows=failed_rows))
     for path in written:
         print(f"报告已写入：{path}")
     return report
+
+
+def summary_json(report: dict, files: Iterable[Any] = ()) -> str:
+    """一行 JSON 摘要（stdout 单行输出，给调度器 / 监控抓取）。"""
+    summary = report["summary"]
+    return json.dumps({
+        "name": report.get("name") or report.get("config"),
+        "status": summary["status"],
+        "exit_code": summary["exit_code"],
+        "total": summary["total"],
+        "passed": summary["passed"],
+        "failed": summary["failed"],
+        "errors": summary["errors"],
+        "duration_ms": report["duration_ms"],
+        "time": report["time"],
+        "blocking": summary["blocking"],
+        "reports": report.get("reports") or [str(path) for path in files],
+    }, ensure_ascii=False)
 
 
 def case_entry(case_file: Any, argv=None, run_func=None) -> int:
@@ -211,6 +236,14 @@ def case_entry(case_file: Any, argv=None, run_func=None) -> int:
     parser.add_argument("--failed-rows", action="store_true", help="控制台打印失败样本行")
     parser.add_argument("--strict-fields", action="store_true",
                         help="规则里出现 actual / result 等运行结果字段时报错")
+    parser.add_argument("--include-sql", action="store_true",
+                        help="报告里带上渲染后的 SQL（排查用，报告会变大）")
+    parser.add_argument("--fail-on-warn", action="store_true",
+                        help="warn 级失败也让退出码变成 1")
+    parser.add_argument("--archive", action="store_true",
+                        help="往 <报告目录>/history/ 留一份带时间戳的历史报告")
+    parser.add_argument("--summary-json", action="store_true",
+                        help="stdout 再打印一行 JSON 摘要（给调度器 / 监控解析）")
     args = parser.parse_args(argv)
     try:
         formats = parse_reports(args.report)
@@ -221,25 +254,37 @@ def case_entry(case_file: Any, argv=None, run_func=None) -> int:
     try:
         kwargs = dict(variables=variables, formats=formats, output_dir=args.output_dir,
                       show_console="console" in formats, failed_rows=args.failed_rows,
-                      strict_fields=args.strict_fields)
+                      strict_fields=args.strict_fields, include_sql=args.include_sql,
+                      fail_on_warn=args.fail_on_warn, archive=args.archive)
         if args.only:
             kwargs["only"] = parse_only(args.only)
         if args.env:
             kwargs["env_file"] = args.env
         runner = run_func or (lambda **kw: run_case(case_file, **kw))
-        report = runner(**kwargs)
+        report = runner(**_supported_kwargs(runner, kwargs))
     except ConfigError as exc:
         print(f"[配置错误] {exc}", file=sys.stderr)
         return 2
+    if args.summary_json:
+        print(summary_json(report))
     return report["summary"]["exit_code"]
 
 
-def run_case_by_name(case: Any, **kwargs) -> int:
-    """主文件用：优先调用 testcase/<名字>.py 里的 run()，没有就按 YAML 直接跑。"""
+def run_case_by_name(case: Any, **kwargs) -> dict:
+    """主文件用：优先调用 testcase/<名字>.py 里的 run()，没有就按 YAML 直接跑。返回 report。"""
     py_path = case_python(case)
     if py_path.is_file():
         module = load_case_module(py_path)
-        report = module.run(**kwargs)
-    else:
-        report = run_case(case, **kwargs)
-    return report["summary"]["exit_code"]
+        return module.run(**_supported_kwargs(module.run, kwargs))
+    return run_case(case, **kwargs)
+
+
+def _supported_kwargs(func, kwargs: Mapping[str, Any]) -> dict:
+    """只传函数签名里有的参数：老用例的 run() 没写新参数时也不会报 TypeError。"""
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):          # pragma: no cover - 内置函数等
+        return dict(kwargs)
+    if any(item.kind is inspect.Parameter.VAR_KEYWORD for item in params.values()):
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in params}

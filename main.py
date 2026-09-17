@@ -47,6 +47,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--failed-rows", action="store_true", help="控制台也打印失败样本行")
     parser.add_argument("--strict-fields", action="store_true",
                         help="规则里出现 actual / result 等运行结果字段时报错")
+    parser.add_argument("--include-sql", action="store_true",
+                        help="报告里带上渲染后的 SQL（排查用，报告会变大）")
+    parser.add_argument("--fail-on-warn", action="store_true",
+                        help="warn 级失败也让退出码变成 1")
+    parser.add_argument("--archive", action="store_true",
+                        help="往 reports/history/ 留一份带时间戳的历史报告")
+    parser.add_argument("--summary-json", action="store_true",
+                        help="stdout 打印一行 JSON 摘要（给调度器 / 监控解析）")
     parser.add_argument("--list-checks", action="store_true", help="列出支持的规则类型")
     parser.add_argument("--list-connectors", action="store_true", help="列出支持的数据源 / 数据库")
     parser.add_argument("--version", action="version", version=f"data-quality-center {common.__version__}")
@@ -144,13 +152,17 @@ def main(argv=None) -> int:
         print(f"=== 规则集：{name} ===", file=sys.stderr)
         kwargs = dict(variables=variables, formats=formats, output_dir=args.output_dir,
                       show_console="console" in formats, failed_rows=args.failed_rows,
-                      strict_fields=args.strict_fields)
+                      strict_fields=args.strict_fields, include_sql=args.include_sql,
+                      fail_on_warn=args.fail_on_warn, archive=args.archive)
         if only:
             kwargs["only"] = only
         if args.env:
             kwargs["env_file"] = args.env
         try:
-            code = common.run_case_by_name(name, **kwargs)
+            report = common.run_case_by_name(name, **kwargs)
+            code = report["summary"]["exit_code"]
+            if args.summary_json:
+                print(common.summary_json(report))
         except common.ConfigError as exc:
             print(f"[配置错误] {name}: {exc}", file=sys.stderr)
             code = 2

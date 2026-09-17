@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import html
 import json
+import shutil
+from collections.abc import Iterable, Sequence
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 _BADGE = {"PASS": "PASS", "FAIL": "FAIL", "ERROR": "ERROR"}
 
@@ -30,6 +33,13 @@ def render_console(report: dict, failed_rows: bool = False, color: bool | None =
         lines.append(f"按维度：{detail}")
     if summary["blocking"]:
         lines.append(f"触发门禁的规则：{', '.join(summary['blocking'])}")
+    if report.get("sources"):
+        detail = "；".join(f"{item['name']}（{item['type']}"
+                           + (f"/{item['conn']}" if item.get("conn") else "") + "）"
+                           for item in report["sources"])
+        lines.append(f"数据源：{detail}")
+    if summary.get("fail_on_warn"):
+        lines.append("门禁模式：warn 级失败也会让退出码变成 1（--fail-on-warn）")
 
     headers = ["检查项", "数据源", "维度", "类型", "级别", "状态", "实际", "期望", "说明", "耗时ms"]
     rows = [[
@@ -96,7 +106,9 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
     for row in rows:
         for index, cell in enumerate(row):
             widths[index] = max(widths[index], len(str(cell)))
-    line = lambda cells: "| " + " | ".join(str(c).ljust(widths[i]) for i, c in enumerate(cells)) + " |"
+    def line(cells) -> str:
+        return "| " + " | ".join(str(c).ljust(widths[i]) for i, c in enumerate(cells)) + " |"
+
     sep = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
     return "\n".join([sep, line(headers), sep] + [line(row) for row in rows] + [sep])
 
@@ -111,8 +123,13 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
 # --------------------------------------------------------------------------- #
 def write_reports(report: dict, output_dir: Any = "reports",
                   formats: Iterable[str] = ("json", "md", "html"),
-                  prefix: str = "result") -> list:
-    """写报告文件，文件名用 ``<prefix>.json/.md/.html``，返回写出的路径。"""
+                  prefix: str = "result", archive: bool = False,
+                  archive_dir: Any = None, timestamp: str | None = None) -> list:
+    """写报告文件：``<prefix>.json/.md/.html``，返回写出的路径。
+
+    ``archive=True`` 时再往 ``<output_dir>/history/`` 复制一份带时间戳的副本，
+    方便定时任务留痕、对比历史（例如 ``<uuid>_20260917-020000.json``）。
+    """
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     wanted = {str(item).strip().lower() for item in formats}
@@ -123,6 +140,13 @@ def write_reports(report: dict, output_dir: Any = "reports",
         written.append(_write(directory / f"{prefix}.md", to_markdown(report)))
     if "html" in wanted or "all" in wanted:
         written.append(_write(directory / f"{prefix}.html", to_html(report)))
+    if archive and written:
+        history = Path(archive_dir) if archive_dir else directory / "history"
+        history.mkdir(parents=True, exist_ok=True)
+        stamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+        for path in written:
+            shutil.copy2(path, history / f"{prefix}_{stamp}{path.suffix}")
+    report["reports"] = [str(path) for path in written]   # 回填给 --summary-json 用
     return written
 
 
@@ -146,16 +170,20 @@ def to_markdown(report: dict) -> str:
     ]
     if summary["blocking"]:
         lines.append(f"- 触发门禁的规则：{', '.join(summary['blocking'])}")
+    if report.get("sources"):
+        lines.append("- 数据源：" + "；".join(
+            f"`{item['name']}`（{item['type']}" + (f" / {item['conn']}" if item.get("conn") else "") + "）"
+            for item in report["sources"]))
     if summary["by_dim"]:
         lines += ["", "## 按维度", "", "| 维度 | 通过 | 失败 | 错误 | 总数 |", "| --- | --- | --- | --- | --- |"]
         for dim, item in sorted(summary["by_dim"].items()):
             lines.append(f"| {dim} | {item['passed']} | {item['failed']} | {item['errors']} | {item['total']} |")
     lines += ["", "## 检查明细", "",
-              "| 检查项 | 数据源 | 维度 | 类型 | 级别 | 状态 | 实际 | 期望 | 说明 | 耗时(ms) |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "| 检查项 | 数据源 | 数据源类型 | 规则类型 | 维度 | 级别 | 状态 | 实际 | 期望 | 说明 | 耗时(ms) |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for item in report["results"]:
-        lines.append("| {name} | {source} | {dim} | {type} | {severity} | {status} | {actual} | "
-                     "{expected} | {message} | {duration_ms} |".format(
+        lines.append("| {name} | {source} | {source_type} | {type} | {dim} | {severity} | {status} | "
+                     "{actual} | {expected} | {message} | {duration_ms} |".format(
                          **{**item, "actual": _md(item["actual"]), "expected": _md(item["expected"]),
                             "message": _md(item["message"])}))
     failures = [item for item in report["results"] if item["status"] != "PASS"]
@@ -164,6 +192,8 @@ def to_markdown(report: dict) -> str:
         for item in failures:
             lines += [f"### {item['name']}（{item['source']} / {item['type']} / {item['severity']}）", "",
                       f"{item['message']}", ""]
+            if item.get("sql"):
+                lines += ["```sql", item["sql"].strip(), "```", ""]
             if item["failed_rows"]:
                 columns = list(item["failed_rows"][0].keys())
                 lines += ["| " + " | ".join(columns) + " |",
@@ -190,7 +220,8 @@ def to_html(report: dict) -> str:
             detail += f"<details><summary>失败样本（{len(item['failed_rows'])} 行）</summary><pre>{sample}</pre></details>"
         rows.append("<tr>" + "".join(
             f"<td>{html.escape(str(cell))}</td>" for cell in (
-                item["name"], item["source"], item["dim"], item["type"], item["severity"],
+                item["name"], item["source"], item.get("source_type", ""), item["dim"],
+                item["type"], item["severity"],
             )
         ) + f'<td class="{item["status"]}">{item["status"]}</td>'
           + f"<td>{html.escape(_short(item['actual'], 60))}</td>"
@@ -223,8 +254,8 @@ def to_html(report: dict) -> str:
 <table><thead><tr><th>维度</th><th>通过</th><th>失败</th><th>错误</th><th>总数</th></tr></thead>
 <tbody>{dim_rows}</tbody></table>
 <h2>检查明细</h2>
-<table><thead><tr><th>检查项</th><th>数据源</th><th>维度</th><th>类型</th><th>级别</th><th>状态</th>
-<th>实际</th><th>期望</th><th>说明</th><th>耗时(ms)</th></tr></thead>
+<table><thead><tr><th>检查项</th><th>数据源</th><th>数据源类型</th><th>维度</th><th>规则类型</th>
+<th>级别</th><th>状态</th><th>实际</th><th>期望</th><th>说明</th><th>耗时(ms)</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 </body></html>
 """

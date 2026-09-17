@@ -23,12 +23,14 @@ SHOW_FAILED_ROWS = False
 
 
 def run(variables=None, formats=REPORT_FORMATS, output_dir=OUTPUT_DIR, show_console=True,
-        failed_rows=SHOW_FAILED_ROWS, strict_fields=False, only=None, env_file=ENV_FILE):
+        failed_rows=SHOW_FAILED_ROWS, strict_fields=False, only=None, env_file=ENV_FILE,
+        include_sql=False, fail_on_warn=False, archive=False):
     """执行本规则集：读 YAML → 跑规则 → 出报告，返回 report（含 summary / results）。"""
     config = common.load_rules(YAML, env_file=env_file, strict_fields=strict_fields)
-    report = common.run(config, variables={**EXTRA_VARS, **(variables or {})}, only=only or ONLY)
+    report = common.run(config, variables={**EXTRA_VARS, **(variables or {})}, only=only or ONLY,
+                        include_sql=include_sql, fail_on_warn=fail_on_warn)
     written = common.write_reports(report, output_dir or common.REPORT_DIR, formats,
-                                   prefix=YAML.stem)
+                                   prefix=YAML.stem, archive=archive)
     if show_console:
         print(common.render_console(report, failed_rows=failed_rows))
     for path in written:

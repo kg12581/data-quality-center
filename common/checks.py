@@ -13,15 +13,15 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 import pandas as pd
 
 from . import db
 
-
-MAX_SAMPLE = 10  # 失败样本最多留 10 行
+MAX_SAMPLE = 10  # 失败样本默认留 10 行，规则里可用 sample_limit 调整（上限 1000）
 _PLACEHOLDER = re.compile(r"\$\{(\w+)\}|\{\{\s*(\w+)\s*\}\}")
 
 
@@ -45,6 +45,9 @@ class CheckResult:
     message: str = ""
     failed_rows: list = field(default_factory=list)
     duration_ms: float = 0.0
+    source_type: str = ""        # 数据源类型（csv/hive/odps…），报告里便于排查
+    conn_name: str = ""          # 用的连接名（.env 里的名字），不含账号密码
+    sql: str = ""                # 渲染后的 SQL（--include-sql 时才带上）
 
     @property
     def result(self) -> str:
@@ -66,6 +69,9 @@ class CheckResult:
             "message": self.message,
             "failed_rows": self.failed_rows,
             "duration_ms": self.duration_ms,
+            "source_type": self.source_type,
+            "conn_name": self.conn_name,
+            "sql": self.sql,
         }
 
 
@@ -179,6 +185,14 @@ def records(frame: Any, limit: int = MAX_SAMPLE) -> list:
         return []
     return [{str(key): jsonable(value) for key, value in row.items()}
             for row in frame.head(limit).to_dict(orient="records")]
+
+
+def sample_limit(check: Mapping[str, Any]) -> int:
+    """失败样本行数：规则里的 sample_limit，默认 10，最大 1000。"""
+    value = check.get("sample_limit", MAX_SAMPLE)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CheckError(f"sample_limit 必须是正整数，实际是 {value!r}")
+    return min(value, 1000)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,8 +322,12 @@ def build_sql(check: Mapping[str, Any], source_name: str, source: Mapping[str, A
 # --------------------------------------------------------------------------- #
 # 执行
 # --------------------------------------------------------------------------- #
-def run_check(check: Mapping[str, Any], sources, overrides: Mapping[str, Any] | None = None) -> CheckResult:
-    """执行一条规则；任何异常都变成 status=ERROR，不影响其它规则。"""
+def run_check(check: Mapping[str, Any], sources, overrides: Mapping[str, Any] | None = None,
+              include_sql: bool = False) -> CheckResult:
+    """执行一条规则；任何异常都变成 status=ERROR，不影响其它规则。
+
+    ``include_sql=True`` 时把渲染后的 SQL 一起写进结果（排查用，报告会变大）。
+    """
     started = time.perf_counter()
     base = dict(
         name=str(check.get("name", "")),
@@ -322,15 +340,20 @@ def run_check(check: Mapping[str, Any], sources, overrides: Mapping[str, Any] | 
     try:
         source_name = base["source"]
         source = sources.config.sources[source_name]
+        base["source_type"] = db._kind(source)
+        base["conn_name"] = str(source.get("conn") or "")
         variables = sources.config.vars_for(check, overrides)
         sql, mode, expected, operator = build_sql(check, source_name, source, sources.base_dir, variables)
+        if include_sql:
+            base["sql"] = sql
         connection, origin = sources.connection(source_name, check)
         if origin == "frame" and check["type"] != "sql":
             check_columns(check, sources.frame(source_name))
         frame = db.query(connection, sql)
         total = len(sources.frame(source_name)) if origin == "frame" else None
-        outcome = (_judge_rows(check, frame, expected, operator, total) if mode == "rows"
-                   else _judge_metric(frame, expected, operator))
+        limit = sample_limit(check)
+        outcome = (_judge_rows(check, frame, expected, operator, total, limit) if mode == "rows"
+                   else _judge_metric(frame, expected, operator, limit))
     except CheckError as exc:
         base["message"] = str(exc)
     except Exception as exc:  # 兜底：单条规则出错不影响整体
@@ -354,7 +377,7 @@ def _apply_threshold(check: Mapping[str, Any], status: str, failed: int, total, 
 
 
 def _judge_rows(check: Mapping[str, Any], frame: pd.DataFrame, expected: Any,
-                operator: str, total) -> dict:
+                operator: str, total, limit: int = MAX_SAMPLE) -> dict:
     count = int(len(frame))
     target = 0 if expected is None else expected
     passed, comparison = compare(count, target, operator)
@@ -366,10 +389,11 @@ def _judge_rows(check: Mapping[str, Any], frame: pd.DataFrame, expected: Any,
     if status == "FAIL" and check.get("message"):
         message = f"{message}｜{check['message']}"
     return {"status": status, "actual": count, "expected": target, "operator": operator,
-            "message": message, "failed_rows": records(frame) if status == "FAIL" else []}
+            "message": message, "failed_rows": records(frame, limit) if status == "FAIL" else []}
 
 
-def _judge_metric(frame: pd.DataFrame, expected: Any, operator: str) -> dict:
+def _judge_metric(frame: pd.DataFrame, expected: Any, operator: str,
+                  limit: int = MAX_SAMPLE) -> dict:
     if frame is None or len(frame) == 0:
         raise CheckError("指标模式要求 SQL 返回一行，但查询没有返回任何行")
     if isinstance(expected, Mapping):
@@ -389,7 +413,8 @@ def _judge_metric(frame: pd.DataFrame, expected: Any, operator: str) -> dict:
                 problems.append(f"{column}={jsonable(row[column])!r} 不满足 {comparison}")
         if problems:
             return {"status": "FAIL", "actual": actual, "expected": dict(expected), "operator": operator,
-                    "message": "指标不符合预期：" + "；".join(problems), "failed_rows": records(frame)}
+                    "message": "指标不符合预期：" + "；".join(problems),
+                    "failed_rows": records(frame, limit)}
         return {"status": "PASS", "actual": actual, "expected": dict(expected), "operator": operator,
                 "message": f"指标符合预期：{actual}", "failed_rows": []}
 
@@ -406,5 +431,5 @@ def _judge_metric(frame: pd.DataFrame, expected: Any, operator: str) -> dict:
         "operator": operator,
         "message": (f"指标 {frame.columns[0]}={jsonable(value)!r}，期望 {comparison} "
                     f"{'通过' if passed else '不通过'}"),
-        "failed_rows": [] if passed else records(frame),
+        "failed_rows": [] if passed else records(frame, limit),
     }

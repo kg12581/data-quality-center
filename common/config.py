@@ -9,9 +9,10 @@ from __future__ import annotations
 import difflib
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
 
@@ -35,7 +36,7 @@ MODES = ("metric", "rows")
 
 COMMON_FIELDS = {
     "name", "source", "type", "dim", "severity", "description", "message",
-    "vars", "threshold", "filter", "enabled",
+    "vars", "threshold", "filter", "enabled", "sample_limit",
 }
 CHECK_FIELDS = {
     "sql": {"sql", "sql_file", "query", "expected", "expect", "operator", "mode",

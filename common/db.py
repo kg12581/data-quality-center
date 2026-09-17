@@ -13,8 +13,9 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import quote_plus
 
 import pandas as pd
