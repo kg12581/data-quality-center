@@ -227,6 +227,11 @@ make new NAME=订单数据质量 TYPE=hive CONN=hive_mfg TABLE=ods_order_di
 - `.github/workflows/ci.yml`：push/PR 时在 Python 3.10/3.11/3.12 上跑 pytest + 跑一遍 CSV 示例用例
 - `.github/workflows/nightly.yml`：每天定时（或手动触发）跑示例用例，报告作为 artifact 上传
 
+> 如果 push 时报 `refusing to allow an OAuth App to create or update workflow`，
+> 说明当前 git 凭据没有 `workflow` 权限：执行 `gh auth refresh -h github.com -s workflow`
+> （或改用带 `workflow` scope 的 PAT），然后
+> `git add .github && git commit -m "ci: 增加 CI 与定时任务" && git push`。
+
 ## 开发者
 
 ```bash
